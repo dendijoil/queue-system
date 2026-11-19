@@ -131,19 +131,23 @@ pnpm db:migrate                    # apply migrations to the local database
 pnpm dev                           # API on :3000, web apps on :5173–5176
 ```
 
+> [!NOTE]
+> The first `pnpm infra:up` creates the `app_rw` role from [`infra/postgres/init/`](infra/postgres/init/). That script only runs on an empty data volume, so if your local database was created before it existed, run `pnpm infra:reset` once (this **deletes** local data), then `pnpm infra:up` and `pnpm db:migrate` again.
+
 Check that the API is up at <http://localhost:3000/health> and <http://localhost:3000/health/ready>.
 
 ### Environment variables
 
 Set these in `apps/api/.env`:
 
-| Variable       | Default                                             | Description                  |
-| -------------- | --------------------------------------------------- | ---------------------------- |
-| `PORT`         | `3000`                                              | HTTP port for the API        |
-| `HOST`         | `0.0.0.0`                                           | Bind address                 |
-| `LOG_LEVEL`    | `info`                                              | pino log level               |
-| `DATABASE_URL` | `postgres://antrian:antrian@localhost:5432/antrian` | PostgreSQL connection string |
-| `REDIS_URL`    | `redis://localhost:6379`                            | Redis connection string      |
+| Variable                 | Value in `.env.example`                             | Description                                                                   |
+| ------------------------ | --------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `PORT`                   | `3000`                                              | HTTP port for the API                                                         |
+| `HOST`                   | `0.0.0.0`                                           | Bind address                                                                  |
+| `LOG_LEVEL`              | `info`                                              | pino log level                                                                |
+| `DATABASE_URL`           | `postgres://app_rw:app_rw@localhost:5432/antrian`   | Connection used by the API. Must be a role without `SUPERUSER` or `BYPASSRLS` |
+| `MIGRATION_DATABASE_URL` | `postgres://antrian:antrian@localhost:5432/antrian` | Table-owner connection, used only by `pnpm db:migrate` and `pnpm db:generate` |
+| `REDIS_URL`              | `redis://localhost:6379`                            | Redis connection string                                                       |
 
 ### Scripts
 
@@ -156,8 +160,9 @@ Set these in `apps/api/.env`:
 | `pnpm lint`                         | ESLint                                                                              |
 | `pnpm format` / `pnpm format:check` | Prettier                                                                            |
 | `pnpm db:generate`                  | Generate a new migration from `apps/api/src/db/schema.ts`                           |
-| `pnpm db:migrate`                   | Apply migrations to `DATABASE_URL`                                                  |
+| `pnpm db:migrate`                   | Apply migrations to `MIGRATION_DATABASE_URL`                                        |
 | `pnpm infra:up` / `pnpm infra:down` | Start or stop local PostgreSQL and Redis                                            |
+| `pnpm infra:reset`                  | Stop local services and **delete** their data volumes                               |
 
 ## Integration API
 
@@ -243,10 +248,9 @@ const ticket = await q.tickets.create(
 - Every tenant-owned table has a `tenant_id` column and an RLS policy named `<table>_tenant_isolation` ([ADR-002](docs/adr/002-multi-tenant-rls.md)).
 - All application data access **must** go through `withTenant(db, tenantId, tx => …)` in [`apps/api/src/db/tenant.ts`](apps/api/src/db/tenant.ts).
 - The tenant is never read from the request body or query. It always comes from a verified identity: a JWT claim, an API key, a device token, or a stream token.
-- RLS is forced (`FORCE ROW LEVEL SECURITY`), so it also applies to the table owner, but **not** to superusers. In staging and production, the app must connect with a role that has neither `SUPERUSER` nor `BYPASSRLS` (e.g. `app_rw`).
-
-> [!WARNING]
-> The `antrian` user in [`infra/docker-compose.dev.yml`](infra/docker-compose.dev.yml) is a superuser. That's why tenant isolation is verified with `pnpm test`, not against the local Docker database.
+- RLS is forced (`FORCE ROW LEVEL SECURITY`), so it also applies to the table owner, but **not** to superusers or roles with `BYPASSRLS`. The API therefore connects as a separate application role (`app_rw`), and migrations run as the table owner.
+- The API refuses to start if `DATABASE_URL` points to a superuser or a `BYPASSRLS` role ([`apps/api/src/db/role-guard.ts`](apps/api/src/db/role-guard.ts)).
+- Locally, the `antrian` superuser from [`infra/docker-compose.dev.yml`](infra/docker-compose.dev.yml) is used only for migrations; the API runs as `app_rw`, so RLS behaves the same as in staging and production.
 
 ## Documentation
 
@@ -272,7 +276,7 @@ const ticket = await q.tickets.create(
 
 ## Roadmap
 
-- [ ] **0 · Foundation** _(in progress)_: monorepo ✓, DB schema with `tenant_id` + RLS ✓, `withTenant` ✓, isolation tests in CI ✓; auth, staging, and observability still to do
+- [ ] **0 · Foundation** _(in progress)_: monorepo ✓, DB schema with `tenant_id` + RLS ✓, `withTenant` ✓, isolation tests in CI ✓, local `app_rw` role + startup guard ✓; auth, staging, and observability still to do
 - [ ] **1 · Queue engine:** number series, state machine, call-next with priorities and targeted transfers, quotas and hours, outbox + dispatcher, load tests
 - [ ] **2 · Integration:** REST v1 + OpenAPI, WebSocket gateway with resume, webhooks with retries, full SDK, sandbox
 - [ ] **3 · Built-in clients:** kiosk + printing, counter app, display + audio, per-tenant branding

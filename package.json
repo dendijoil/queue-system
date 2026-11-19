@@ -17,6 +17,7 @@
     "format:check": "prettier --check .",
     "infra:up": "docker compose -f infra/docker-compose.dev.yml up -d",
     "infra:down": "docker compose -f infra/docker-compose.dev.yml down",
+    "infra:reset": "docker compose -f infra/docker-compose.dev.yml down -v",
     "db:generate": "turbo run db:generate",
     "db:migrate": "turbo run db:migrate"
   },

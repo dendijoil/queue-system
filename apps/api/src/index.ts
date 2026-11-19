@@ -1,6 +1,7 @@
 import { Redis } from 'ioredis';
 import { loadConfig } from './config.js';
 import { createDb } from './db/client.js';
+import { assertRlsEnforced, readDbRole } from './db/role-guard.js';
 import { buildServer } from './server.js';
 
 const config = loadConfig();
@@ -24,6 +25,14 @@ async function shutdown(signal: string) {
   await app.close();
   await Promise.allSettled([sql.end({ timeout: 5 }), redis.quit()]);
   process.exit(0);
+}
+
+try {
+  assertRlsEnforced(await readDbRole((query) => sql.unsafe(query)));
+} catch (err) {
+  app.log.fatal(err);
+  await Promise.allSettled([sql.end({ timeout: 5 }), redis.quit()]);
+  process.exit(1);
 }
 
 process.on('SIGINT', () => void shutdown('SIGINT'));
